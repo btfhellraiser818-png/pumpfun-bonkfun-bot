@@ -22,7 +22,7 @@ platform: "pump_fun"
 
 # Trade execution: amount per trade and acceptable price deviation
 trade:
-  buy_amount: 0.0001 # Amount of SOL to spend when buying (in SOL)
+  buy_amount: 0.002 # Amount of SOL to spend when buying (in SOL)
   buy_slippage: 0.3 # Maximum acceptable price deviation (0.3 = 30%)
   sell_slippage: 0.3
 
