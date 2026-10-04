@@ -99,9 +99,13 @@ The YAML files are commented inline. The sections that matter most:
 
 ### Extreme fast mode
 
-With `extreme_fast_mode: true` the bot buys a fixed token amount
-(`extreme_fast_token_amount`) instead of reading the curve price first. You give
-up knowing what you paid per token; you get the buy submitted sooner.
+With `extreme_fast_mode: true` the bot skips reading the curve price before
+buying, so the buy is submitted sooner. It still spends `buy_amount`: the price
+comes from the virtual reserves in the coin's `CreateEvent` (or the pre-buy
+account read below). Those predate the creator's opening buy, so the real price
+can be a little higher; the slippage cap absorbs that. Only a coin with no
+reserves to price from, such as one from the `shreds` listener, falls back to
+buying the fixed `extreme_fast_token_amount`.
 
 How much sooner depends on what the listener could decode. When it read the
 coin's `CreateEvent`, the bot makes **no RPC call at all between detecting the

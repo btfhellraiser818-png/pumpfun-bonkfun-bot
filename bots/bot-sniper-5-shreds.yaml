@@ -65,7 +65,7 @@ trade:
   # faster — the coin is detected before it exists on chain, so there is no
   # curve to price against.
   extreme_fast_mode: true
-  extreme_fast_token_amount: 20 # Amount of tokens to buy
+  extreme_fast_token_amount: 20 # Tokens to buy only when the coin has no reserves to price from
 
   # Unused in shreds mode. Applies if you switch this bot to another listener.
   curve_refresh_budget: 2.0

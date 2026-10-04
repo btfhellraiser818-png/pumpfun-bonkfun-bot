@@ -372,6 +372,7 @@ class PumpFunEventParser(EventParser):
                         quote_mint=quote_mint,
                         quote_token_program_id=cached_quote_token_program(quote_mint),
                         virtual_quote_reserves=fields.get("virtual_quote_reserves"),
+                        virtual_token_reserves=fields.get("virtual_token_reserves"),
                         state_from_event=state_from_event,
                         creation_timestamp=monotonic(),
                     )

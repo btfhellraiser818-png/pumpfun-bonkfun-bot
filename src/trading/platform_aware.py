@@ -120,6 +120,28 @@ def _refresh_quote_mint(token_info: TokenInfo, pool_state: dict) -> Pubkey:
     return quote_mint
 
 
+def _price_from_reserves(token_info: TokenInfo, quote_unit: int) -> float | None:
+    """Price per whole token, in whole quote units, from token_info's reserves.
+
+    Same formula as the curve decoder's `price_per_token`. The CreateEvent's
+    reserves predate the creator's opening buy in the same transaction, so this
+    can read low by that buy's impact; the buy's slippage cap absorbs it.
+
+    Args:
+        quote_unit: Raw units per whole quote unit, from `quote_units_per_token`
+
+    Returns:
+        The price, or None when either reserve is missing or non-positive
+    """
+    token_reserves = token_info.virtual_token_reserves
+    quote_reserves = token_info.virtual_quote_reserves
+    if not token_reserves or not quote_reserves:
+        return None
+    if token_reserves <= 0 or quote_reserves <= 0:
+        return None
+    return (quote_reserves / token_reserves) * 10**TOKEN_DECIMALS / quote_unit
+
+
 class PlatformAwareBuyer(Trader):
     """Platform-aware token buyer that works with any supported platform."""
 
@@ -148,7 +170,9 @@ class PlatformAwareBuyer(Trader):
             amount: Amount of SOL to spend per buy on SOL-paired coins
             slippage: Acceptable price deviation
             max_retries: Transaction submission attempts
-            extreme_fast_token_amount: Tokens to buy when skipping price checks
+            extreme_fast_token_amount: Tokens to buy in extreme_fast_mode when the
+                TokenInfo carries no reserves to price from; otherwise the buy
+                is sized from `amount` like the regular path
             extreme_fast_mode: Skip curve stabilization and price check
             compute_units: Optional CU overrides
             quote_amounts: Per-quote-mint spend amounts in whole quote units,
@@ -260,12 +284,23 @@ class PlatformAwareBuyer(Trader):
             quote_unit = quote_units_per_token(quote_mint)
             quote_label = quote_symbol(quote_mint)
 
-            # Both branches size the trade from the resolved quote amount:
-            # extreme_fast_mode fixes the token count and back-derives an implied
-            # price, the regular path fixes the spend and derives the count.
+            # Both branches fix the spend and derive the token count from a
+            # price: extreme_fast_mode prices from the reserves the CreateEvent
+            # (or its curve refresh) carried, the regular path from the curve.
             if self.extreme_fast_mode:
-                token_amount = self.extreme_fast_token_amount
-                token_price_sol = quote_amount / token_amount if token_amount > 0 else 0
+                token_price_sol = _price_from_reserves(token_info, quote_unit)
+                if token_price_sol is not None:
+                    token_amount = quote_amount / token_price_sol
+                else:
+                    token_amount = self.extreme_fast_token_amount
+                    token_price_sol = (
+                        quote_amount / token_amount if token_amount > 0 else 0
+                    )
+                    logger.warning(
+                        f"No reserves to price {token_info.symbol} from; buying "
+                        f"the fixed extreme_fast_token_amount of {token_amount} "
+                        f"tokens instead of {quote_amount} {quote_label} worth"
+                    )
             else:
                 if token_price_sol is None or token_price_sol <= 0:
                     raise ValueError(
@@ -506,6 +541,13 @@ class PlatformAwareBuyer(Trader):
         # The quote asset decides which balance is spent and how amounts scale,
         # so it must come from the curve rather than a listener guess.
         _refresh_quote_mint(token_info, pool_state)
+        # Sizes the extreme_fast_mode buy from the price these reserves imply.
+        token_info.virtual_token_reserves = pool_state.get(
+            "virtual_token_reserves", token_info.virtual_token_reserves
+        )
+        token_info.virtual_quote_reserves = pool_state.get(
+            "virtual_quote_reserves", token_info.virtual_quote_reserves
+        )
         fresh_creator = pool_state.get("creator")
         if fresh_creator and hasattr(address_provider, "derive_creator_vault"):
             new_creator = (

@@ -26,6 +26,7 @@ individual scripts for a subset.
 | `verify_listener_cancel_under_flood.py` | a listener cancelled while frames keep arriving still stops, and no listener wraps `recv()` in `asyncio.wait_for`, which drops that cancellation on Python 3.11 |
 | `verify_create_log_gate.py` | the create marker is matched as a whole log line, so a foreign `Create*` instruction is not a coin and a real create sharing its transaction with one is still detected |
 | `verify_extreme_fast_zero_rpc.py` | zero RPC calls between detection and submission for CreateEvent-sourced tokens |
+| `verify_extreme_fast_sizing.py` | an `extreme_fast_mode` buy spends `buy_amount` at the price the CreateEvent's or the curve refresh's reserves imply, and falls back to `extreme_fast_token_amount` only without reserves |
 | `verify_curve_refresh_buy_path.py` | a TokenInfo without `state_from_event` refreshes first: an unreadable curve skips the buy, and curve + mint are read in one slot-consistent batch that corrects the token program |
 | `verify_cleanup_survives_shutdown.py` | shutdown cleanup runs to completion through the cancellation that triggered it, bounded, and a cleanup that hangs or raises still lets the process exit |
 | `verify_token_queue_shutdown.py` | cancelling the token queue processor ends it without raising, and `task_done()` stays balanced on the paths that took an item |
