@@ -36,6 +36,10 @@ trade:
   # the price and retries; after this many attempts it gives up and leaves the
   # position open, tokens still held.
   max_exit_sell_attempts: 3
+  # The last of those attempts accepts up to this fraction below the freshly
+  # read price instead of sell_slippage, so a coin crashing faster than
+  # sell_slippage per attempt is still sold rather than stranded. 0..1.
+  final_exit_sell_slippage: 0.95
 
   # EXTREME FAST mode: skip the curve-stabilization wait and the price check,
   # buying a fixed token amount instead. Faster, but you don't learn the price

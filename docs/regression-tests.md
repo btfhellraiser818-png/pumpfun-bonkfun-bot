@@ -35,6 +35,7 @@ individual scripts for a subset.
 | `verify_tx_status_checks.py` | every path reads `meta.err`; `--live` replays known reverted signatures |
 | `verify_tp_sl_exit_price.py` | the tp/sl exit prices off the trigger price, and a reverted sell is retried, bounded |
 | `verify_time_based_exit_retry.py` | the default `time_based` exit retries a reverted sell instead of stranding the position |
+| `verify_final_exit_sell_slippage.py` | `trade.final_exit_sell_slippage` loosens only the last exit attempt, in both the time-based and tp/sl exits; unset, the seller is called as before; the real seller floors the sale with the override |
 | `verify_time_exit_without_price.py` | `max_hold_time` still fires when every price read fails |
 | `verify_exit_sell_confirmation.py` | an exit sell is retried only when retrying is provably safe |
 | `verify_rpc_deadline.py` | `post_rpc` bounds wall time, not just attempts (virtual clock) |

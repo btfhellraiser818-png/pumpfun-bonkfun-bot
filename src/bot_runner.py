@@ -115,6 +115,7 @@ async def start_bot(config_path: str):
             max_exit_sell_attempts=cfg["trade"].get(
                 "max_exit_sell_attempts", DEFAULT_MAX_EXIT_SELL_ATTEMPTS
             ),
+            final_exit_sell_slippage=cfg["trade"].get("final_exit_sell_slippage"),
             # Listener configuration
             listener_type=cfg["filters"]["listener_type"],
             # Geyser configuration (if applicable)

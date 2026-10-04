@@ -710,7 +710,12 @@ class PlatformAwareSeller(Trader):
         self.compute_units = compute_units or {}
 
     async def execute(
-        self, token_info: TokenInfo, token_amount: float, token_price: float
+        self,
+        token_info: TokenInfo,
+        token_amount: float,
+        token_price: float,
+        *,
+        slippage: float | None = None,
     ) -> TradeResult:
         """Execute sell operation using platform-specific implementations.
 
@@ -723,6 +728,9 @@ class PlatformAwareSeller(Trader):
                 the freshest price available: a stale price above the market sets
                 a floor the pool cannot pay and the sell reverts (pump.fun 6003
                 TooLittleSolReceived).
+            slippage: Fraction below the expected output this one sell accepts,
+                0..1; None uses the seller's configured slippage. The floor never
+                drops below 1 raw unit, so 1.0 means "any price".
 
         Returns:
             TradeResult with operation outcome
@@ -824,9 +832,10 @@ class PlatformAwareSeller(Trader):
             # Calculate expected quote output with slippage protection, in the
             # quote mint's raw units.
             expected_quote_output = token_balance_decimal * token_price_sol
+            sell_slippage = self.slippage if slippage is None else slippage
             min_quote_output = max(
                 1,
-                int((expected_quote_output * (1 - self.slippage)) * quote_unit),
+                int((expected_quote_output * (1 - sell_slippage)) * quote_unit),
             )
             logger.info(
                 f"Selling {token_balance_decimal} tokens on {token_info.platform.value}"
@@ -835,7 +844,7 @@ class PlatformAwareSeller(Trader):
                 f"Expected {quote_label} output: {expected_quote_output:.10f} {quote_label}"
             )
             logger.info(
-                f"Minimum {quote_label} output (with {self.slippage * 100:.1f}% slippage): "
+                f"Minimum {quote_label} output (with {sell_slippage * 100:.1f}% slippage): "
                 f"{min_quote_output / quote_unit:.10f} {quote_label} "
                 f"({min_quote_output} raw units)"
             )

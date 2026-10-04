@@ -131,6 +131,10 @@ def _resolve_quote_config(
 class UniversalTrader:
     """Universal trading coordinator that works with any supported platform."""
 
+    # Off unless set in __init__; class-level so a trader built without
+    # __init__ (the regression verifiers do) still has it.
+    final_exit_sell_slippage: float | None = None
+
     #: Seconds shutdown cleanup may take before the process exits regardless.
     #: Cleanup settles for 15s per account before reading it, so this has to
     #: cover a session's worth of traded coins, not one.
@@ -167,6 +171,7 @@ class UniversalTrader:
         max_hold_time: int | None = None,
         price_check_interval: int = 10,
         max_exit_sell_attempts: int = DEFAULT_MAX_EXIT_SELL_ATTEMPTS,
+        final_exit_sell_slippage: float | None = None,
         # Priority fee configuration
         enable_dynamic_priority_fee: bool = False,
         enable_fixed_priority_fee: bool = True,
@@ -286,9 +291,17 @@ class UniversalTrader:
         self.stop_loss_percentage = stop_loss_percentage
         self.max_hold_time = max_hold_time
         # The attempt cap is clamped: below 1 would mean "never try to sell".
-        self.price_check_interval, self.max_exit_sell_attempts = (
+        # final_exit_sell_slippage is the floor for the last attempt only (None
+        # keeps sell_slippage): a coin falling faster than sell_slippage per
+        # attempt otherwise reverts every attempt and is stranded, unmonitored.
+        (
+            self.price_check_interval,
+            self.max_exit_sell_attempts,
+            self.final_exit_sell_slippage,
+        ) = (
             price_check_interval,
             max(1, max_exit_sell_attempts),
+            final_exit_sell_slippage,
         )
 
         # Timing parameters
@@ -759,7 +772,10 @@ class UniversalTrader:
 
         for attempt in range(1, self.max_exit_sell_attempts + 1):
             sell_result: TradeResult = await self.seller.execute(
-                token_info, token_amount=buy_result.amount, token_price=token_price
+                token_info,
+                token_amount=buy_result.amount,
+                token_price=token_price,
+                **self._exit_slippage_kwargs(attempt),
             )
 
             if sell_result.success:
@@ -810,6 +826,19 @@ class UniversalTrader:
             f"{self.max_exit_sell_attempts} attempts. Position stays open "
             f"and is no longer monitored - tokens are still held."
         )
+
+    def _exit_slippage_kwargs(self, attempt: int) -> dict[str, float]:
+        """Seller kwargs for an exit attempt: the override on the last one only.
+
+        Empty unless final_exit_sell_slippage is set, so sellers that predate the
+        `slippage` keyword keep working with the feature off.
+        """
+        if (
+            self.final_exit_sell_slippage is not None
+            and attempt >= self.max_exit_sell_attempts
+        ):
+            return {"slippage": self.final_exit_sell_slippage}
+        return {}
 
     async def _classify_failed_exit_sell(
         self, token_info: TokenInfo, sell_result: TradeResult
@@ -1032,7 +1061,7 @@ class UniversalTrader:
             attempt budget is spent.
         """
         verdict = await self._attempt_position_exit(
-            token_info, position, exit_reason, price
+            token_info, position, exit_reason, price, attempt
         )
         if verdict is not ExitSellVerdict.RETRY:
             return True
@@ -1052,6 +1081,7 @@ class UniversalTrader:
         position: Position,
         exit_reason: ExitReason,
         price: float,
+        attempt: int,
     ) -> ExitSellVerdict:
         """Sell the position once and report what came of it.
 
@@ -1061,6 +1091,8 @@ class UniversalTrader:
             price: Price the sell is floored against. The seller turns it into
                 `min_quote_output`, so it must be a price the pool can pay — an
                 exit fires precisely because the price left the entry price.
+            attempt: 1-based attempt counter; the last one uses
+                final_exit_sell_slippage
 
         Returns:
             SOLD, LATE_SUCCESS, RETRY, or STOP
@@ -1077,6 +1109,7 @@ class UniversalTrader:
             token_info,
             token_amount=position.quantity,
             token_price=price,
+            **self._exit_slippage_kwargs(attempt),
         )
 
         if sell_result.success:
