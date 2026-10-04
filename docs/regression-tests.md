@@ -23,6 +23,7 @@ individual scripts for a subset.
 | `verify_creator_migration_from_logs.py` | a fee-sharing coin's `creator` comes from `MigrateBondingCurveCreatorEvent` in the same logs, not from `CreateEvent.creator`, so `creator_vault` matches the curve and the buy does not revert `ConstraintSeeds`; ordinary creates unchanged, `state_from_event` kept, and neither event is honoured unless pump.fun's own invocation emitted it |
 | `verify_ping_loop_close_is_quiet.py` | a WebSocket closing normally ends the ping loop quietly in every listener, while an unexpected failure is still logged |
 | `verify_listener_cancellation.py` | a cancelled WebSocket listener stops, even when `websockets` reports cancellation as `AssertionError` |
+| `verify_listener_cancel_under_flood.py` | a listener cancelled while frames keep arriving still stops, and no listener wraps `recv()` in `asyncio.wait_for`, which drops that cancellation on Python 3.11 |
 | `verify_create_log_gate.py` | the create marker is matched as a whole log line, so a foreign `Create*` instruction is not a coin and a real create sharing its transaction with one is still detected |
 | `verify_extreme_fast_zero_rpc.py` | zero RPC calls between detection and submission for CreateEvent-sourced tokens |
 | `verify_curve_refresh_buy_path.py` | a TokenInfo without `state_from_event` refreshes first: an unreadable curve skips the buy, and curve + mint are read in one slot-consistent batch that corrects the token program |

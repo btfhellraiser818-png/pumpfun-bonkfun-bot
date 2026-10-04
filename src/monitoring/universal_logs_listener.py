@@ -212,7 +212,12 @@ class UniversalLogsListener(BaseTokenListener):
     async def _wait_for_token_creation(self, websocket) -> TokenInfo | None:
         """Wait for token creation events from any platform."""
         try:
-            response = await asyncio.wait_for(websocket.recv(), timeout=30)
+            # Not asyncio.wait_for: on Python 3.11 it drops a cancellation that
+            # lands as recv() completes, and under pump.fun's frame rate that is
+            # nearly every cancellation, so single-token mode never stops
+            # listening and never buys.
+            async with asyncio.timeout(30):
+                response = await websocket.recv()
             data = json.loads(response)
 
             if "method" not in data or data["method"] != "logsNotification":
