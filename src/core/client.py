@@ -226,8 +226,11 @@ class SolanaClient:
         """
         async with self._session_lock:
             if self._session is None or self._session.closed:
+                # trust_env honours HTTPS_PROXY; hosts without direct DNS
+                # (proxied containers) cannot reach the RPC otherwise.
                 self._session = aiohttp.ClientSession(
                     timeout=aiohttp.ClientTimeout(total=10),
+                    trust_env=True,
                 )
             return self._session
 
