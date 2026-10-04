@@ -317,17 +317,33 @@ class PlatformAwareBuyer(Trader):
             # Max spend with slippage, in the quote mint's raw units.
             max_quote_amount_raw = int(quote_amount * quote_unit * (1 + self.slippage))
 
-            instructions = await instruction_builder.build_buy_instruction(
-                token_info,
-                self.wallet.pubkey,
-                max_quote_amount_raw,  # amount_in (raw quote units)
-                minimum_token_amount_raw,  # minimum_amount_out (tokens)
-                address_provider,
-            )
-
-            priority_accounts = instruction_builder.get_required_accounts_for_buy(
-                token_info, self.wallet.pubkey, address_provider
-            )
+            async def submit_buy() -> object:
+                """Build the buy from token_info's current state and send it."""
+                instructions = await instruction_builder.build_buy_instruction(
+                    token_info,
+                    self.wallet.pubkey,
+                    max_quote_amount_raw,  # amount_in (raw quote units)
+                    minimum_token_amount_raw,  # minimum_amount_out (tokens)
+                    address_provider,
+                )
+                priority_accounts = instruction_builder.get_required_accounts_for_buy(
+                    token_info, self.wallet.pubkey, address_provider
+                )
+                return await self.client.build_and_send_transaction(
+                    instructions,
+                    self.wallet.keypair,
+                    skip_preflight=True,
+                    max_retries=self.max_retries,
+                    priority_fee=await self.priority_fee_manager.calculate_priority_fee(
+                        priority_accounts
+                    ),
+                    compute_unit_limit=instruction_builder.get_buy_compute_unit_limit(
+                        self._get_cu_override("buy", token_info.platform)
+                    ),
+                    account_data_size_limit=self._get_cu_override(
+                        "account_data_size", token_info.platform
+                    ),
+                )
 
             logger.info(
                 f"Buying {token_amount:.6f} tokens at {token_price_sol:.8f} "
@@ -338,23 +354,19 @@ class PlatformAwareBuyer(Trader):
                 f"(max: {max_quote_amount_raw / quote_unit:.6f} {quote_label})"
             )
 
-            tx_signature = await self.client.build_and_send_transaction(
-                instructions,
-                self.wallet.keypair,
-                skip_preflight=True,
-                max_retries=self.max_retries,
-                priority_fee=await self.priority_fee_manager.calculate_priority_fee(
-                    priority_accounts
-                ),
-                compute_unit_limit=instruction_builder.get_buy_compute_unit_limit(
-                    self._get_cu_override("buy", token_info.platform)
-                ),
-                account_data_size_limit=self._get_cu_override(
-                    "account_data_size", token_info.platform
-                ),
-            )
-
-            success = await self.client.confirm_transaction(tx_signature)
+            tx_signature = await submit_buy()
+            status = await self.client.confirm_transaction_detailed(tx_signature)
+            if status is ConfirmationStatus.REVERTED and await self._creator_moved(
+                token_info, address_provider, curve_manager
+            ):
+                logger.warning(
+                    f"Buy of {token_info.symbol} reverted because the curve's "
+                    f"creator changed after creation; retrying once with "
+                    f"creator {token_info.creator}"
+                )
+                tx_signature = await submit_buy()
+                status = await self.client.confirm_transaction_detailed(tx_signature)
+            success = status is ConfirmationStatus.SUCCESS
 
             if success:
                 logger.info(f"Buy transaction confirmed: {tx_signature}")
@@ -434,6 +446,34 @@ class PlatformAwareBuyer(Trader):
             return TradeResult(
                 success=False, platform=token_info.platform, error_message=str(e)
             )
+
+    async def _creator_moved(
+        self,
+        token_info: TokenInfo,
+        address_provider: AddressProvider,
+        curve_manager: object,
+    ) -> bool:
+        """Re-read the curve after a reverted buy; report whether its creator moved.
+
+        A coin can hand its creator to a fee-sharing config in a transaction after
+        the create, which no listener sees in time. A buy built from the
+        CreateEvent's creator then derives the wrong creator_vault and reverts
+        with ConstraintSeeds (2006). The refresh rewrites token_info in place, so
+        True means a rebuilt buy uses the curve's creator. Any other revert leaves
+        the creator alone and returns False, so it is not retried. A moved quote
+        mint also returns False: the buy was sized in the old quote's units.
+        """
+        old_creator = token_info.creator
+        old_quote = normalize_quote_mint(token_info.quote_mint)
+        skip_reason = await self._refresh_curve_state(
+            token_info, address_provider, curve_manager
+        )
+        if skip_reason is not None:
+            return False
+        return (
+            token_info.creator != old_creator
+            and normalize_quote_mint(token_info.quote_mint) == old_quote
+        )
 
     def _get_pool_address(
         self, token_info: TokenInfo, address_provider: AddressProvider
