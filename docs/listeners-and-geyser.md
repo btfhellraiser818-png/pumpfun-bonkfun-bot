@@ -85,6 +85,10 @@ against mainnet.
   `recv()` raise immediately, forever, and leaves the outer reconnect handler and
   its `sleep` unreachable. A narrow `except TimeoutError` or
   `except json.JSONDecodeError` is fine to swallow — those are per-message.
+- **Time out a read with `async with asyncio.timeout(...)`, not
+  `asyncio.wait_for(recv(), ...)`.** On Python 3.11 `wait_for` drops a
+  cancellation that lands as `recv()` completes. A busy subscription makes that
+  the common case, so single-token mode never stops the listener and never buys.
 - **Never gate a listener's dispatch on decoding the transaction envelope.** The
   envelope is the one part of a transaction whose format changes under you, and
   the installed solders is only ever one version behind. Route on

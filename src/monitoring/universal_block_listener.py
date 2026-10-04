@@ -259,7 +259,10 @@ class UniversalBlockListener(BaseTokenListener):
             TokenInfo if a token creation is found, None otherwise
         """
         try:
-            response = await asyncio.wait_for(websocket.recv(), timeout=30)
+            # Not asyncio.wait_for: on Python 3.11 it drops a cancellation that
+            # lands as recv() completes, so the listener outlives its shutdown.
+            async with asyncio.timeout(30):
+                response = await websocket.recv()
             transactions = self._transactions_from_frame(json.loads(response))
             if transactions is None:
                 return None
