@@ -32,11 +32,11 @@ trade:
   sell_slippage: 0.3
 
   # Exit strategy configuration
-  exit_strategy: "tp_sl" # Options: "time_based", "tp_sl", "manual"
-  take_profit_percentage: 0.5 # Take profit at 50% gain (0.5 = 50%)
-  stop_loss_percentage: 0.2 # Stop loss at 20% loss (0.2 = 20%)
-  max_hold_time: 30 # Maximum hold time in seconds for TP/SL strategy, for time_based - see wait_after_buy
-  price_check_interval: 1 # Check price every second
+  exit_strategy: "time_based" # Options: "time_based", "tp_sl", "manual"
+  take_profit_percentage: 0.4 # Take profit at 40% gain (0.4 = 40%)
+  stop_loss_percentage: 0.4 # Stop loss at 40% loss (0.4 = 40%)
+  max_hold_time: 15 # Maximum hold time in seconds for TP/SL strategy, for time_based - see wait_after_buy
+  price_check_interval: 2 # Check price every 2 seconds
   # A tp/sl exit sell can revert when the price moves under it. The bot re-reads
   # the price and retries; after this many attempts it gives up and leaves the
   # position open, tokens still held.
