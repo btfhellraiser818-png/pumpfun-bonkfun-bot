@@ -34,6 +34,7 @@ individual scripts for a subset.
 | `verify_buy_retries_moved_creator.py` | a buy that reverts because the curve's creator moved after the create (to a fee-sharing config) is re-read and retried once with the curve's creator; any other revert or an unconfirmed buy is not retried, nor anything with `trade.retry_moved_creator: false` |
 | `verify_tx_status_checks.py` | every path reads `meta.err`; `--live` replays known reverted signatures |
 | `verify_tp_sl_exit_price.py` | the tp/sl exit prices off the trigger price, and a reverted sell is retried, bounded |
+| `verify_skip_mayhem_mode.py` | `filters.skip_mayhem_mode` drops a mayhem-mode coin, its flag read from the create alone, before the buyer is called; ordinary coins and the default still buy |
 | `verify_time_based_exit_retry.py` | the default `time_based` exit retries a reverted sell instead of stranding the position |
 | `verify_final_exit_sell_slippage.py` | `trade.final_exit_sell_slippage` loosens only the last exit attempt, in both the time-based and tp/sl exits; unset, the seller is called as before; the real seller floors the sale with the override |
 | `verify_time_exit_without_price.py` | `max_hold_time` still fires when every price read fails |

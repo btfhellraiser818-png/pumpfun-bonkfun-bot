@@ -104,6 +104,7 @@ async def start_bot(config_path: str):
             curve_refresh_budget=cfg["trade"].get("curve_refresh_budget", 2.0),
             trust_create_event=cfg["trade"].get("trust_create_event", True),
             retry_moved_creator=cfg["trade"].get("retry_moved_creator", True),
+            skip_mayhem_mode=cfg["filters"].get("skip_mayhem_mode", False),
             # Quote asset configuration (pump.fun non-SOL pairs)
             quote_amounts=cfg["trade"].get("quote_amounts"),
             allowed_quote_mints=cfg["filters"].get("allowed_quote_mints"),

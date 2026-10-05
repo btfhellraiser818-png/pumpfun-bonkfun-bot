@@ -193,6 +193,7 @@ class UniversalTrader:
         # Trading filters
         match_string: str | None = None,
         bro_address: str | None = None,
+        skip_mayhem_mode: bool = False,
         marry_mode: bool = False,
         yolo_mode: bool = False,
         # Compute unit configuration
@@ -320,7 +321,7 @@ class UniversalTrader:
 
         # Trading filters/modes
         self.match_string = match_string
-        self.bro_address = bro_address
+        self.bro_address, self.skip_mayhem_mode = bro_address, skip_mayhem_mode
         self.marry_mode = marry_mode
         self.yolo_mode = yolo_mode
 
@@ -647,6 +648,12 @@ class UniversalTrader:
                     f"Skipping {token_info.symbol} - no buy amount configured for "
                     f"quote mint {token_quote_mint}"
                 )
+                return
+            # A mayhem-mode curve's virtual reserves can price a position above
+            # the real SOL it holds, and pump.fun then reverts every sell of it
+            # with Overflow (6024) whatever the slippage, stranding the tokens.
+            if self.skip_mayhem_mode and token_info.is_mayhem_mode:
+                logger.info(f"Skipping {token_info.symbol} - mayhem mode coin")
                 return
 
             # Wait for pool/curve to stabilize (unless in extreme fast mode)

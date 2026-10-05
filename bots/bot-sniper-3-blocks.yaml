@@ -80,6 +80,9 @@ compute_units:
 filters:
   match_string: null # Only process tokens with this string in name/symbol
   bro_address: null # Only trade tokens created by this user address
+  # Pass on mayhem-mode coins: their sells can revert with Overflow (6024)
+  # at any slippage when the curve holds less real SOL than it prices.
+  skip_mayhem_mode: false
   listener_type: "blocks" # Method for detecting new tokens: "logs", "blocks", or "geyser"
   max_token_age: 0.001 # Maximum token age in seconds for processing
   marry_mode: false # Only buy tokens, skip selling

@@ -92,7 +92,7 @@ The YAML files are commented inline. The sections that matter most:
 
 - **`trade`** — `buy_amount` (in SOL), slippage, `exit_strategy` (`time_based`, `tp_sl`, `manual`), and [`extreme_fast_mode`](#extreme-fast-mode).
 - **`priority_fees`** — fixed or dynamic. Dynamic costs an extra RPC call, which slows the buy.
-- **`filters`** — `listener_type`, `max_token_age`, name/creator matching, `marry_mode` (buy only, never sell), `yolo_mode` (trade continuously).
+- **`filters`** — `listener_type`, `max_token_age`, name/creator matching, `skip_mayhem_mode` (pass on pump.fun mayhem-mode coins, whose sells can revert with no way out), `marry_mode` (buy only, never sell), `yolo_mode` (trade continuously).
 - **`retries`** — attempts and the wait windows around creation, buy, and the next token.
 - **`cleanup`** — when to close leftover token accounts: `disabled`, `on_fail`, `after_sell`, `post_session`.
 - **`node.max_rps`** — cap requests per second to match your provider's plan.
