@@ -66,7 +66,7 @@ trade:
 priority_fees:
   enable_dynamic: false # Use latest transactions to estimate required fee (getRecentPrioritizationFees)
   enable_fixed: true # Use fixed amount below
-  fixed_amount: 200_000 # Base fee in microlamports
+  fixed_amount: 50_000 # Base fee in microlamports
   extra_percentage: 0.0 # Percentage increase on riority fee regardless of the calculation method (0.1 = 10%)
   hard_cap: 200_000 # Maximum allowable fee in microlamports to prevent excessive spending
 
