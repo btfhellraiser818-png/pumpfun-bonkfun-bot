@@ -113,13 +113,17 @@ token and submitting the buy**. When it fell back to decoding the create
 instruction, it does one account read first, because the instruction is missing
 fields the buy needs.
 
-Two knobs:
+Three knobs:
 
 - **`curve_refresh_budget`** (seconds, default 2.0) — how long that read may
   take before the bot gives up and skips the token. Raise it to buy more coins
   on a slow endpoint, lower it to skip faster.
 - **`trust_create_event`** (default `true`) — set `false` to make every listener
   do the read, giving up the zero-RPC path.
+- **`retry_moved_creator`** (default `true`) — a coin's creator can move to a
+  fee-sharing config after the create, which reverts a buy built from the
+  create. The bot re-reads the curve and resends once; set `false` to take the
+  revert and skip the coin instead.
 
 ### Non-SOL quote assets
 

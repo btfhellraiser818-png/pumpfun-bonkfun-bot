@@ -160,6 +160,7 @@ class PlatformAwareBuyer(Trader):
         curve_refresh_budget: float = 2.0,
         *,
         trust_create_event: bool = True,
+        retry_moved_creator: bool = True,
     ):
         """Initialize platform-aware token buyer.
 
@@ -186,6 +187,9 @@ class PlatformAwareBuyer(Trader):
                 state_from_event, so extreme_fast_mode makes zero RPC calls
                 between detection and submission. False forces the refresh for
                 every listener.
+            retry_moved_creator: Resend once a buy that reverted because the
+                curve's creator moved after the create. False leaves the revert
+                as the result and skips the curve read that checks for it.
         """
         self.client = client
         self.wallet = wallet
@@ -198,6 +202,7 @@ class PlatformAwareBuyer(Trader):
         self.compute_units = compute_units or {}
         self.curve_refresh_budget = curve_refresh_budget
         self.trust_create_event = trust_create_event
+        self.retry_moved_creator = retry_moved_creator
         # SOL-paired coins always use `amount`; other quotes need an explicit
         # per-mint amount because 0.0001 USDC and 0.0001 SOL are not comparable.
         self.quote_amounts: dict[Pubkey, float] = {
@@ -356,8 +361,12 @@ class PlatformAwareBuyer(Trader):
 
             tx_signature = await submit_buy()
             status = await self.client.confirm_transaction_detailed(tx_signature)
-            if status is ConfirmationStatus.REVERTED and await self._creator_moved(
-                token_info, address_provider, curve_manager
+            if (
+                status is ConfirmationStatus.REVERTED
+                and self.retry_moved_creator
+                and await self._creator_moved(
+                    token_info, address_provider, curve_manager
+                )
             ):
                 logger.warning(
                     f"Buy of {token_info.symbol} reverted because the curve's "

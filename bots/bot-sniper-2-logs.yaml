@@ -26,8 +26,9 @@ trade:
   # Also an entry filter in extreme_fast_mode: the buy asks for (1 - this) of
   # buy_amount's tokens at the launch price and caps spend at (1 + this), so
   # pump.fun rejects it once the price is above ~(1 + this) / (1 - this) of
-  # launch. 0.11 refuses entries past ~1.25x, after other snipers have bought.
-  buy_slippage: 0.11
+  # launch. 0.025 refuses entries past ~1.05x: across 151 live trades only
+  # entries within 5% of launch were net profitable.
+  buy_slippage: 0.025
   sell_slippage: 0.3
 
   # Exit strategy configuration
@@ -60,6 +61,10 @@ trade:
   # Set false to make every listener do the pre-buy read, giving up the
   # zero-RPC path above.
   trust_create_event: true
+
+  # Resend once a buy that reverted because the coin's creator moved to a
+  # fee-sharing config after the create. Off: none of 9 such retries won.
+  retry_moved_creator: false
 
 # Priority fees: transaction speed vs cost.
 # Note: dynamic mode costs an extra RPC call, which slows the buy.

@@ -161,6 +161,7 @@ class UniversalTrader:
         curve_refresh_budget: float = 2.0,
         *,
         trust_create_event: bool = True,
+        retry_moved_creator: bool = True,
         # Quote asset configuration (pump.fun non-SOL pairs)
         quote_amounts: dict[str, float] | None = None,
         allowed_quote_mints: list[str] | None = None,
@@ -256,6 +257,7 @@ class UniversalTrader:
                 quote_amounts=self.quote_amounts,
                 curve_refresh_budget=curve_refresh_budget,
                 trust_create_event=trust_create_event,
+                retry_moved_creator=retry_moved_creator,
             ),
             PlatformAwareSeller(
                 self.solana_client,

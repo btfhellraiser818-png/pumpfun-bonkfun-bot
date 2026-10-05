@@ -31,7 +31,7 @@ individual scripts for a subset.
 | `verify_cleanup_survives_shutdown.py` | shutdown cleanup runs to completion through the cancellation that triggered it, bounded, and a cleanup that hangs or raises still lets the process exit |
 | `verify_token_queue_shutdown.py` | cancelling the token queue processor ends it without raising, and `task_done()` stays balanced on the paths that took an item |
 | `verify_buy_result_not_lost.py` | a landed buy is never reported failed, and a reverted one never reported landed |
-| `verify_buy_retries_moved_creator.py` | a buy that reverts because the curve's creator moved after the create (to a fee-sharing config) is re-read and retried once with the curve's creator; any other revert or an unconfirmed buy is not retried |
+| `verify_buy_retries_moved_creator.py` | a buy that reverts because the curve's creator moved after the create (to a fee-sharing config) is re-read and retried once with the curve's creator; any other revert or an unconfirmed buy is not retried, nor anything with `trade.retry_moved_creator: false` |
 | `verify_tx_status_checks.py` | every path reads `meta.err`; `--live` replays known reverted signatures |
 | `verify_tp_sl_exit_price.py` | the tp/sl exit prices off the trigger price, and a reverted sell is retried, bounded |
 | `verify_time_based_exit_retry.py` | the default `time_based` exit retries a reverted sell instead of stranding the position |

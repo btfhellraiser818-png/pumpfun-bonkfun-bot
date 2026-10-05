@@ -18,6 +18,8 @@ Offline machine checks, no network and no funds moved:
   2. A revert with an unchanged creator is not retried.
   3. An unconfirmed buy is neither re-read nor retried: it may have landed.
   4. A retry that reverts again stops there — at most two submissions.
+  5. With `trade.retry_moved_creator: false` a moved creator is neither re-read
+     nor retried: the revert is the result.
 
 Usage:
     uv run tests/regression/verify_buy_retries_moved_creator.py
@@ -116,7 +118,10 @@ class _CurveManager:
 
 
 def _run(
-    statuses: list[ConfirmationStatus], curve_creator: Pubkey | None
+    statuses: list[ConfirmationStatus],
+    curve_creator: Pubkey | None,
+    *,
+    retry_moved_creator: bool = True,
 ) -> tuple[object, _Client, _CurveManager, list[Pubkey], TokenInfo]:
     """Run one buy; curve_creator None means the curve still holds the event's."""
     token_info = _token_info()
@@ -150,6 +155,7 @@ def _run(
         slippage=0.3,
         max_retries=1,
         extreme_fast_mode=True,
+        retry_moved_creator=retry_moved_creator,
     )
     result = asyncio.run(buyer.execute(token_info))
     return result, client, curve, vaults_built, token_info
@@ -219,6 +225,21 @@ def check_retry_is_bounded() -> bool:
     )
 
 
+def check_retry_can_be_disabled() -> bool:
+    print("\n5. retry_moved_creator=False: a moved creator is not re-read or retried")
+    event_info = _token_info()
+    moved = PumpFunAddresses.find_sharing_config(event_info.mint)
+    result, client, curve, _vaults, _info = _run(
+        [REVERTED], moved, retry_moved_creator=False
+    )
+    return _check(
+        "submissions / curve reads / success",
+        passed=client.sends == 1 and curve.reads == 0 and not result.success,
+        detail=f"{client.sends} / {curve.reads} / {result.success} "
+        f"(want 1 / 0 / False)",
+    )
+
+
 def main() -> None:
     print("=" * 72)
     print("Verifying a buy retries once when the curve's creator moved")
@@ -230,6 +251,7 @@ def main() -> None:
         check_same_creator_does_not_retry,
         check_unconfirmed_is_not_retried,
         check_retry_is_bounded,
+        check_retry_can_be_disabled,
     ):
         try:
             results.append(check())
