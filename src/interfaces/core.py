@@ -94,6 +94,9 @@ class TokenInfo:
     quote_mint: Pubkey | None = None
     quote_token_program_id: Pubkey | None = None
     virtual_quote_reserves: int | None = None
+    # Raw base-token units. With virtual_quote_reserves, this prices the coin
+    # for extreme_fast_mode without a curve read; None when the source had none.
+    virtual_token_reserves: int | None = None
 
     # True when creator, mayhem/cashback flags and quote_mint were read from the
     # on-chain CreateEvent, letting extreme_fast_mode skip the pre-buy curve

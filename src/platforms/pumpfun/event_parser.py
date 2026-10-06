@@ -322,11 +322,21 @@ class PumpFunEventParser(EventParser):
                         logger.info(f"❌ Failed to convert pubkey fields: {e}")
                         continue
 
-                    # Derive additional addresses (default to TOKEN_2022_PROGRAM as per pump.fun's migration to create_v2)
-                    # Note: As of recent pump.fun updates, all tokens are created via create_v2 instruction
-                    # This is a technical limitation of logs listener - cannot distinguish create vs create_v2
-                    # Risk is low since pump.fun now defaults to Token2022 for all new tokens
-                    token_program_id = SystemAddresses.TOKEN_2022_PROGRAM
+                    # CreateEvent names the base mint's token program: SPL Token
+                    # for a legacy `create`, Token-2022 for `create_v2`. The ATA
+                    # and associated_bonding_curve derive from it, and this
+                    # TokenInfo is trusted without a curve read, so a guess here
+                    # reverts the buy. Old events without the field are create_v2.
+                    event_program = _coerce_pubkey(fields.get("token_program"))
+                    token_program_id = (
+                        event_program
+                        if event_program
+                        in (
+                            SystemAddresses.TOKEN_PROGRAM,
+                            SystemAddresses.TOKEN_2022_PROGRAM,
+                        )
+                        else SystemAddresses.TOKEN_2022_PROGRAM
+                    )
                     associated_bonding_curve = self._derive_associated_bonding_curve(
                         mint, bonding_curve, token_program_id
                     )
@@ -372,6 +382,7 @@ class PumpFunEventParser(EventParser):
                         quote_mint=quote_mint,
                         quote_token_program_id=cached_quote_token_program(quote_mint),
                         virtual_quote_reserves=fields.get("virtual_quote_reserves"),
+                        virtual_token_reserves=fields.get("virtual_token_reserves"),
                         state_from_event=state_from_event,
                         creation_timestamp=monotonic(),
                     )

@@ -24,15 +24,21 @@ individual scripts for a subset.
 | `verify_ping_loop_close_is_quiet.py` | a WebSocket closing normally ends the ping loop quietly in every listener, while an unexpected failure is still logged |
 | `verify_listener_cancellation.py` | a cancelled WebSocket listener stops, even when `websockets` reports cancellation as `AssertionError` |
 | `verify_listener_cancel_under_flood.py` | a listener cancelled while frames keep arriving still stops, and no listener wraps `recv()` in `asyncio.wait_for`, which drops that cancellation on Python 3.11 |
+| `verify_event_token_program.py` | the logs parser takes the base mint's token program from CreateEvent, so a legacy SPL Token coin's ATA and associated bonding curve are derived under SPL Token |
 | `verify_create_log_gate.py` | the create marker is matched as a whole log line, so a foreign `Create*` instruction is not a coin and a real create sharing its transaction with one is still detected |
 | `verify_extreme_fast_zero_rpc.py` | zero RPC calls between detection and submission for CreateEvent-sourced tokens |
+| `verify_extreme_fast_sizing.py` | an `extreme_fast_mode` buy spends `buy_amount` at the price the CreateEvent's or the curve refresh's reserves imply, and falls back to `extreme_fast_token_amount` only without reserves |
 | `verify_curve_refresh_buy_path.py` | a TokenInfo without `state_from_event` refreshes first: an unreadable curve skips the buy, and curve + mint are read in one slot-consistent batch that corrects the token program |
 | `verify_cleanup_survives_shutdown.py` | shutdown cleanup runs to completion through the cancellation that triggered it, bounded, and a cleanup that hangs or raises still lets the process exit |
 | `verify_token_queue_shutdown.py` | cancelling the token queue processor ends it without raising, and `task_done()` stays balanced on the paths that took an item |
 | `verify_buy_result_not_lost.py` | a landed buy is never reported failed, and a reverted one never reported landed |
+| `verify_unconfirmed_buy_not_dropped.py` | a confirmation that errors still reads the transaction back; an unconfirmed buy is re-checked on chain, then by wallet balance, before it is called failed, and is never cleaned up as a failure; a send that timed out after the request carries its signature, so neither side reports it as never sent |
+| `verify_buy_retries_moved_creator.py` | a buy that reverts because the curve's creator moved after the create (to a fee-sharing config) is re-read and retried once with the curve's creator; any other revert or an unconfirmed buy is not retried, nor anything with `trade.retry_moved_creator: false`; outside extreme_fast_mode the first buy already uses the curve's creator |
 | `verify_tx_status_checks.py` | every path reads `meta.err`; `--live` replays known reverted signatures |
 | `verify_tp_sl_exit_price.py` | the tp/sl exit prices off the trigger price, and a reverted sell is retried, bounded |
+| `verify_skip_mayhem_mode.py` | `filters.skip_mayhem_mode` drops a mayhem-mode coin, its flag read from the create alone, before the buyer is called; ordinary coins and the default still buy; in single-token mode a filtered coin is passed over instead of ending the run |
 | `verify_time_based_exit_retry.py` | the default `time_based` exit retries a reverted sell instead of stranding the position |
+| `verify_final_exit_sell_slippage.py` | `trade.final_exit_sell_slippage` loosens only the last exit attempt, in both the time-based and tp/sl exits; unset, the seller is called as before; the real seller floors the sale with the override |
 | `verify_time_exit_without_price.py` | `max_hold_time` still fires when every price read fails |
 | `verify_exit_sell_confirmation.py` | an exit sell is retried only when retrying is provably safe |
 | `verify_rpc_deadline.py` | `post_rpc` bounds wall time, not just attempts (virtual clock) |
@@ -40,7 +46,7 @@ individual scripts for a subset.
 | `verify_migration_event_discriminator.py` | the migration decoder rejects any payload that is not the wrapper program's `CreatePoolEvent`, including a foreign one long enough for the schema |
 | `verify_cookbook_arguments.py` | every cookbook script takes its input as a command-line argument |
 | `verify_documentation_links.py` | no known-dead URL is back; `--live` fetches every one and fails on 4xx/5xx |
-| `verify_no_rpc_credentials_logged.py` | credentials masked in every log record, including a URL passed as a non-`str` argument, and every site that installs a root handler installs the redaction first |
+| `verify_no_rpc_credentials_logged.py` | credentials masked in every log record, including a URL passed as a non-`str` argument and the traceback under `logger.exception`, and every site that installs a root handler installs the redaction first |
 | `verify_pumpfun_prices_without_hardcoded_sol_unit.py` | nothing in `core/`, `trading/` or `platforms/pumpfun/` scales an amount by `LAMPORTS_PER_SOL`; the letsbonk sites left out of scope are still the documented ones |
 | `verify_pumpswap_account_layout.py` | pump-amm's `pool-v2` account is gated on `coin_creator`, the buyback pair stays last, and base-token decimals are resolved rather than assumed; `--live` re-reads the authorized recipients from `GlobalConfig` |
 

@@ -92,16 +92,20 @@ The YAML files are commented inline. The sections that matter most:
 
 - **`trade`** — `buy_amount` (in SOL), slippage, `exit_strategy` (`time_based`, `tp_sl`, `manual`), and [`extreme_fast_mode`](#extreme-fast-mode).
 - **`priority_fees`** — fixed or dynamic. Dynamic costs an extra RPC call, which slows the buy.
-- **`filters`** — `listener_type`, `max_token_age`, name/creator matching, `marry_mode` (buy only, never sell), `yolo_mode` (trade continuously).
+- **`filters`** — `listener_type`, `max_token_age`, name/creator matching, `skip_mayhem_mode` (pass on pump.fun mayhem-mode coins, whose sells can revert with no way out), `marry_mode` (buy only, never sell), `yolo_mode` (trade continuously).
 - **`retries`** — attempts and the wait windows around creation, buy, and the next token.
 - **`cleanup`** — when to close leftover token accounts: `disabled`, `on_fail`, `after_sell`, `post_session`.
 - **`node.max_rps`** — cap requests per second to match your provider's plan.
 
 ### Extreme fast mode
 
-With `extreme_fast_mode: true` the bot buys a fixed token amount
-(`extreme_fast_token_amount`) instead of reading the curve price first. You give
-up knowing what you paid per token; you get the buy submitted sooner.
+With `extreme_fast_mode: true` the bot skips reading the curve price before
+buying, so the buy is submitted sooner. It still spends `buy_amount`: the price
+comes from the virtual reserves in the coin's `CreateEvent` (or the pre-buy
+account read below). Those predate the creator's opening buy, so the real price
+can be a little higher; the slippage cap absorbs that. Only a coin with no
+reserves to price from, such as one from the `shreds` listener, falls back to
+buying the fixed `extreme_fast_token_amount`.
 
 How much sooner depends on what the listener could decode. When it read the
 coin's `CreateEvent`, the bot makes **no RPC call at all between detecting the
@@ -109,13 +113,17 @@ token and submitting the buy**. When it fell back to decoding the create
 instruction, it does one account read first, because the instruction is missing
 fields the buy needs.
 
-Two knobs:
+Three knobs:
 
 - **`curve_refresh_budget`** (seconds, default 2.0) — how long that read may
   take before the bot gives up and skips the token. Raise it to buy more coins
   on a slow endpoint, lower it to skip faster.
 - **`trust_create_event`** (default `true`) — set `false` to make every listener
   do the read, giving up the zero-RPC path.
+- **`retry_moved_creator`** (default `true`) — a coin's creator can move to a
+  fee-sharing config after the create, which reverts a buy built from the
+  create. The bot re-reads the curve and resends once; set `false` to take the
+  revert and skip the coin instead.
 
 ### Non-SOL quote assets
 

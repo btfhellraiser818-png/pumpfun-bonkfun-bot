@@ -131,6 +131,10 @@ def _resolve_quote_config(
 class UniversalTrader:
     """Universal trading coordinator that works with any supported platform."""
 
+    # Off unless set in __init__; class-level so a trader built without
+    # __init__ (the regression verifiers do) still has it.
+    final_exit_sell_slippage: float | None = None
+
     #: Seconds shutdown cleanup may take before the process exits regardless.
     #: Cleanup settles for 15s per account before reading it, so this has to
     #: cover a session's worth of traded coins, not one.
@@ -157,6 +161,7 @@ class UniversalTrader:
         curve_refresh_budget: float = 2.0,
         *,
         trust_create_event: bool = True,
+        retry_moved_creator: bool = True,
         # Quote asset configuration (pump.fun non-SOL pairs)
         quote_amounts: dict[str, float] | None = None,
         allowed_quote_mints: list[str] | None = None,
@@ -167,6 +172,7 @@ class UniversalTrader:
         max_hold_time: int | None = None,
         price_check_interval: int = 10,
         max_exit_sell_attempts: int = DEFAULT_MAX_EXIT_SELL_ATTEMPTS,
+        final_exit_sell_slippage: float | None = None,
         # Priority fee configuration
         enable_dynamic_priority_fee: bool = False,
         enable_fixed_priority_fee: bool = True,
@@ -187,6 +193,7 @@ class UniversalTrader:
         # Trading filters
         match_string: str | None = None,
         bro_address: str | None = None,
+        skip_mayhem_mode: bool = False,
         marry_mode: bool = False,
         yolo_mode: bool = False,
         # Compute unit configuration
@@ -251,6 +258,7 @@ class UniversalTrader:
                 quote_amounts=self.quote_amounts,
                 curve_refresh_budget=curve_refresh_budget,
                 trust_create_event=trust_create_event,
+                retry_moved_creator=retry_moved_creator,
             ),
             PlatformAwareSeller(
                 self.solana_client,
@@ -286,9 +294,17 @@ class UniversalTrader:
         self.stop_loss_percentage = stop_loss_percentage
         self.max_hold_time = max_hold_time
         # The attempt cap is clamped: below 1 would mean "never try to sell".
-        self.price_check_interval, self.max_exit_sell_attempts = (
+        # final_exit_sell_slippage is the floor for the last attempt only (None
+        # keeps sell_slippage): a coin falling faster than sell_slippage per
+        # attempt otherwise reverts every attempt and is stranded, unmonitored.
+        (
+            self.price_check_interval,
+            self.max_exit_sell_attempts,
+            self.final_exit_sell_slippage,
+        ) = (
             price_check_interval,
             max(1, max_exit_sell_attempts),
+            final_exit_sell_slippage,
         )
 
         # Timing parameters
@@ -305,7 +321,7 @@ class UniversalTrader:
 
         # Trading filters/modes
         self.match_string = match_string
-        self.bro_address = bro_address
+        self.bro_address, self.skip_mayhem_mode = bro_address, skip_mayhem_mode
         self.marry_mode = marry_mode
         self.yolo_mode = yolo_mode
 
@@ -438,6 +454,11 @@ class UniversalTrader:
 
             # Only process if not already processed and fresh
             if token_key not in self.processed_tokens:
+                skip_reason = self._entry_skip_reason(token)
+                if skip_reason:
+                    self.processed_tokens.add(token_key)
+                    logger.info(f"Passing over {token.symbol} - {skip_reason}")
+                    return
                 # Record when the token was discovered
                 self.token_timestamps[token_key] = monotonic()
                 found_token = token
@@ -616,23 +637,11 @@ class UniversalTrader:
                 )
                 return
 
-            # Cheaper to drop an unconfigured quote asset here than on-chain.
+            skip_reason = self._entry_skip_reason(token_info)
+            if skip_reason:
+                logger.info(f"Skipping {token_info.symbol} - {skip_reason}")
+                return
             token_quote_mint = normalize_quote_mint(token_info.quote_mint)
-            if (
-                self.allowed_quote_mints is not None
-                and token_quote_mint not in self.allowed_quote_mints
-            ):
-                logger.info(
-                    f"Skipping {token_info.symbol} - quote mint {token_quote_mint} "
-                    f"not in allowed_quote_mints"
-                )
-                return
-            if token_quote_mint not in self.quote_amounts:
-                logger.info(
-                    f"Skipping {token_info.symbol} - no buy amount configured for "
-                    f"quote mint {token_quote_mint}"
-                )
-                return
 
             # Wait for pool/curve to stabilize (unless in extreme fast mode)
             if not self.extreme_fast_mode:
@@ -664,6 +673,28 @@ class UniversalTrader:
 
         except Exception:
             logger.exception(f"Error handling token {token_info.symbol}")
+
+    def _entry_skip_reason(self, token_info: TokenInfo) -> str | None:
+        """Why a coin must not be bought, or None if it passes the entry filters.
+
+        Checked while waiting in single-token mode too, so a rejected coin is
+        passed over instead of ending the run.
+        """
+        # Cheaper to drop an unconfigured quote asset here than on-chain.
+        quote_mint = normalize_quote_mint(token_info.quote_mint)
+        if (
+            self.allowed_quote_mints is not None
+            and quote_mint not in self.allowed_quote_mints
+        ):
+            return f"quote mint {quote_mint} not in allowed_quote_mints"
+        if quote_mint not in self.quote_amounts:
+            return f"no buy amount configured for quote mint {quote_mint}"
+        # A mayhem-mode curve's virtual reserves can price a position above the
+        # real SOL it holds, and pump.fun then reverts every sell of it with
+        # Overflow (6024) whatever the slippage, stranding the tokens.
+        if self.skip_mayhem_mode and token_info.is_mayhem_mode:
+            return "mayhem mode coin"
+        return None
 
     async def _handle_successful_buy(
         self, token_info: TokenInfo, buy_result: TradeResult
@@ -701,6 +732,19 @@ class UniversalTrader:
     ) -> None:
         """Handle failed token purchase."""
         logger.error(f"Failed to buy {token_info.symbol}: {buy_result.error_message}")
+        if buy_result.failure_reason is TradeFailureReason.UNCONFIRMED:
+            # The buy may have landed: never burn it as a failure. Track the mint
+            # so session cleanup reaches its account, and say where to look.
+            logger.error(
+                f"Buy of {token_info.symbol} ({token_info.mint}) is unresolved; "
+                f"check {buy_result.tx_signature} and sell manually if it landed"
+            )
+            self.traded_mints.add(token_info.mint)
+            if token_info.token_program_id:
+                self.traded_token_programs[str(token_info.mint)] = (
+                    token_info.token_program_id
+                )
+            return
         # Close ATA if enabled
         await handle_cleanup_after_failure(
             self.solana_client,
@@ -759,7 +803,10 @@ class UniversalTrader:
 
         for attempt in range(1, self.max_exit_sell_attempts + 1):
             sell_result: TradeResult = await self.seller.execute(
-                token_info, token_amount=buy_result.amount, token_price=token_price
+                token_info,
+                token_amount=buy_result.amount,
+                token_price=token_price,
+                **self._exit_slippage_kwargs(attempt),
             )
 
             if sell_result.success:
@@ -810,6 +857,19 @@ class UniversalTrader:
             f"{self.max_exit_sell_attempts} attempts. Position stays open "
             f"and is no longer monitored - tokens are still held."
         )
+
+    def _exit_slippage_kwargs(self, attempt: int) -> dict[str, float]:
+        """Seller kwargs for an exit attempt: the override on the last one only.
+
+        Empty unless final_exit_sell_slippage is set, so sellers that predate the
+        `slippage` keyword keep working with the feature off.
+        """
+        if (
+            self.final_exit_sell_slippage is not None
+            and attempt >= self.max_exit_sell_attempts
+        ):
+            return {"slippage": self.final_exit_sell_slippage}
+        return {}
 
     async def _classify_failed_exit_sell(
         self, token_info: TokenInfo, sell_result: TradeResult
@@ -1032,7 +1092,7 @@ class UniversalTrader:
             attempt budget is spent.
         """
         verdict = await self._attempt_position_exit(
-            token_info, position, exit_reason, price
+            token_info, position, exit_reason, price, attempt
         )
         if verdict is not ExitSellVerdict.RETRY:
             return True
@@ -1052,6 +1112,7 @@ class UniversalTrader:
         position: Position,
         exit_reason: ExitReason,
         price: float,
+        attempt: int,
     ) -> ExitSellVerdict:
         """Sell the position once and report what came of it.
 
@@ -1061,6 +1122,8 @@ class UniversalTrader:
             price: Price the sell is floored against. The seller turns it into
                 `min_quote_output`, so it must be a price the pool can pay — an
                 exit fires precisely because the price left the entry price.
+            attempt: 1-based attempt counter; the last one uses
+                final_exit_sell_slippage
 
         Returns:
             SOLD, LATE_SUCCESS, RETRY, or STOP
@@ -1077,6 +1140,7 @@ class UniversalTrader:
             token_info,
             token_amount=position.quantity,
             token_price=price,
+            **self._exit_slippage_kwargs(attempt),
         )
 
         if sell_result.success:

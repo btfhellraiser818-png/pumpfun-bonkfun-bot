@@ -34,6 +34,9 @@ scripted `getTransaction` responses:
      the exit cannot liquidate holdings this trade never created.
   8. A buy whose transaction genuinely failed is still reported unsuccessful.
 
+An unconfirmed buy that is re-checked before it is called failed is covered by
+`verify_unconfirmed_buy_not_dropped.py`.
+
 Usage:
     uv run tests/regression/verify_buy_result_not_lost.py
 """
@@ -51,7 +54,7 @@ from solders.pubkey import Pubkey  # noqa: E402
 
 from core.client import SolanaClient  # noqa: E402
 from core.pubkeys import TOKEN_DECIMALS, WSOL_MINT  # noqa: E402
-from interfaces.core import Platform, TokenInfo  # noqa: E402
+from interfaces.core import ConfirmationStatus, Platform, TokenInfo  # noqa: E402
 from trading import platform_aware  # noqa: E402
 from trading.base import TradeResult  # noqa: E402
 from trading.platform_aware import PlatformAwareBuyer  # noqa: E402
@@ -126,11 +129,17 @@ class StubBuyClient:
         confirmed: bool,
         details: tuple[int | None, int | None],
         balance_raw: int = TOKENS_RECEIVED_RAW,
+        recheck: ConfirmationStatus = ConfirmationStatus.UNCONFIRMED,
     ) -> None:
         self.confirmed = confirmed
         self.details = details
         self.balance_raw = balance_raw
+        self.recheck = recheck
         self.balance_reads = 0
+
+    async def verify_transaction_status(self, _signature: object) -> ConfirmationStatus:
+        # What getTransaction says when the buyer re-checks an unconfirmed buy.
+        return self.recheck
 
     async def build_and_send_transaction(
         self, *_args: object, **_kwargs: object
@@ -139,6 +148,16 @@ class StubBuyClient:
 
     async def confirm_transaction(self, _signature: object) -> bool:
         return self.confirmed
+
+    async def confirm_transaction_detailed(
+        self, _signature: object
+    ) -> ConfirmationStatus:
+        # "Not confirmed" here is an unanswered lookup, not a revert.
+        return (
+            ConfirmationStatus.SUCCESS
+            if self.confirmed
+            else ConfirmationStatus.UNCONFIRMED
+        )
 
     async def get_buy_transaction_details(
         self, *_args: object, **_kwargs: object
@@ -196,8 +215,8 @@ async def _run_buy(client: StubBuyClient) -> TradeResult:
         extreme_fast_mode=True,
     )
     original = platform_aware.get_platform_implementations
-    platform_aware.get_platform_implementations = (
-        lambda *_args, **_kwargs: _stub_implementations()
+    platform_aware.get_platform_implementations = lambda *_args, **_kwargs: (
+        _stub_implementations()
     )
     try:
         return await buyer.execute(_make_token_info())
@@ -295,12 +314,17 @@ async def check_fallback_never_exceeds_what_was_bought() -> bool:
 
 async def check_failed_buy_still_fails() -> bool:
     print("\n8. A buy whose transaction did not succeed is still a failure")
-    client = StubBuyClient(confirmed=False, details=(None, None))
+    client = StubBuyClient(
+        confirmed=False,
+        details=(None, None),
+        balance_raw=0,
+        recheck=ConfirmationStatus.REVERTED,
+    )
     result = await _run_buy(client)
     return _check(
         "TradeResult.success",
         result.success is False,
-        f"{result.success} — an unconfirmed buy is not reported as bought",
+        f"{result.success} — a reverted buy is not reported as bought",
     )
 
 
