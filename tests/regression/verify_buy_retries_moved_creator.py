@@ -20,6 +20,8 @@ Offline machine checks, no network and no funds moved:
   4. A retry that reverts again stops there — at most two submissions.
   5. With `trade.retry_moved_creator: false` a moved creator is neither re-read
      nor retried: the revert is the result.
+  6. Outside extreme_fast_mode the buy reads the curve anyway, so its first
+     submission already uses the curve's creator.
 
 Usage:
     uv run tests/regression/verify_buy_retries_moved_creator.py
@@ -108,13 +110,16 @@ class _CurveManager:
         self, *_a: object, **_k: object
     ) -> tuple[dict, Pubkey]:
         self.reads += 1
-        state = {
+        return await self.get_pool_state(), SystemAddresses.TOKEN_2022_PROGRAM
+
+    async def get_pool_state(self, *_a: object, **_k: object) -> dict:
+        return {
             "creator": str(self.creator),
             "is_mayhem_mode": False,
             "is_cashback_coin": False,
             "quote_mint": WSOL_MINT,
+            "price_per_token": 2.8e-8,
         }
-        return state, SystemAddresses.TOKEN_2022_PROGRAM
 
 
 def _run(
@@ -122,6 +127,7 @@ def _run(
     curve_creator: Pubkey | None,
     *,
     retry_moved_creator: bool = True,
+    extreme_fast_mode: bool = True,
 ) -> tuple[object, _Client, _CurveManager, list[Pubkey], TokenInfo]:
     """Run one buy; curve_creator None means the curve still holds the event's."""
     token_info = _token_info()
@@ -154,7 +160,7 @@ def _run(
         amount=0.002,
         slippage=0.3,
         max_retries=1,
-        extreme_fast_mode=True,
+        extreme_fast_mode=extreme_fast_mode,
         retry_moved_creator=retry_moved_creator,
     )
     result = asyncio.run(buyer.execute(token_info))
@@ -240,6 +246,22 @@ def check_retry_can_be_disabled() -> bool:
     )
 
 
+def check_regular_mode_uses_curve_creator() -> bool:
+    print("\n6. Regular mode builds the first buy with the curve's creator")
+    event_info = _token_info()
+    moved = PumpFunAddresses.find_sharing_config(event_info.mint)
+    _result, client, _curve, vaults, _info = _run(
+        [SUCCESS], moved, extreme_fast_mode=False
+    )
+    want = PROVIDER.derive_creator_vault(moved)
+    return _check(
+        "first buy's creator_vault / submissions",
+        passed=bool(vaults) and vaults[0] == want and client.sends == 1,
+        detail=f"{'curve creator' if vaults and vaults[0] == want else vaults} / "
+        f"{client.sends} (want curve creator / 1)",
+    )
+
+
 def main() -> None:
     print("=" * 72)
     print("Verifying a buy retries once when the curve's creator moved")
@@ -252,6 +274,7 @@ def main() -> None:
         check_unconfirmed_is_not_retried,
         check_retry_is_bounded,
         check_retry_can_be_disabled,
+        check_regular_mode_uses_curve_creator,
     ):
         try:
             results.append(check())

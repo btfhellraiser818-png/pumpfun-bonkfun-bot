@@ -7,6 +7,7 @@ from time import monotonic
 from typing import Any
 
 import aiohttp
+import httpx2
 from solana.rpc.async_api import AsyncClient
 from solana.rpc.commitment import Processed
 from solana.rpc.core import TxOptsModel
@@ -39,6 +40,38 @@ INSTRUCTION_ERROR_PAIR_LEN = 2
 # transaction", which on a load-balanced endpoint is not the same as "it failed".
 TX_RESULT_RETRY_BUDGET = 5.0
 TX_RESULT_RETRY_DELAY = 0.4
+
+# Raised after a sendTransaction request may already have reached the node, so
+# the transaction can land although no signature came back. A refused connect,
+# a 4xx or an RPC error body means it was never forwarded.
+_MAYBE_SENT_ERRORS = (
+    httpx2.ReadTimeout,
+    httpx2.ReadError,
+    httpx2.RemoteProtocolError,
+    asyncio.TimeoutError,
+)
+HTTP_SERVER_ERROR = 500
+
+
+def _send_may_have_landed(exc: BaseException) -> bool:
+    """Whether a failed sendTransaction call may still have put the tx on chain.
+
+    solana-py wraps transport errors in SolanaRpcException, so the whole cause
+    chain is checked, not just the outermost exception.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, _MAYBE_SENT_ERRORS):
+            return True
+        if (
+            isinstance(current, httpx2.HTTPStatusError)
+            and current.response.status_code >= HTTP_SERVER_ERROR
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class _Deadline:
@@ -405,6 +438,9 @@ class SolanaClient:
             signer_keypair.pubkey(), instructions, [], recent_blockhash
         )
         transaction = VersionedTransaction(message, [signer_keypair])
+        # Every attempt resends this same signed transaction, so its signature
+        # names whichever attempt may have landed.
+        maybe_sent = False
 
         for attempt in range(max_retries):
             try:
@@ -416,10 +452,15 @@ class SolanaClient:
                 return response.value
 
             except Exception as e:
+                maybe_sent = maybe_sent or _send_may_have_landed(e)
                 if attempt == max_retries - 1:
                     logger.exception(
                         f"Failed to send transaction after {max_retries} attempts"
                     )
+                    # Callers read this to report an unknown outcome instead of
+                    # "never sent", which would let them resend a new transaction.
+                    if maybe_sent:
+                        e.tx_signature = transaction.signatures[0]
                     raise
 
                 wait_time = 2**attempt
@@ -486,8 +527,12 @@ class SolanaClient:
                 signature, commitment=commitment, sleep_seconds=1
             )
         except Exception:
-            logger.exception(f"Failed to confirm transaction {signature}")
-            return ConfirmationStatus.UNCONFIRMED
+            # One 429 or timeout among the status polls raises here while the
+            # transaction may well have landed. getTransaction has its own retry
+            # budget, so ask it rather than reporting an unknown.
+            logger.exception(
+                f"Confirmation polling failed for {signature}; reading it back"
+            )
 
         return await self.verify_transaction_status(signature)
 

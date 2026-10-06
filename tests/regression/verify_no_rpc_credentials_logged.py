@@ -18,6 +18,8 @@ Offline machine checks, no network and no funds moved:
   3. A logger this repo has never heard of, logging at INFO, comes out
      redacted — including when the URL is a non-`str` argument, which is how
      httpx2 passes it and how the first version of this guard was defeated.
+  3b. A traceback logged with `logger.exception` is redacted too: the
+     exception's own text carries the request URL.
   4. Importing `core.client` installs the redaction: every module that logs
      calls `get_logger` at import, and that is where it is installed.
   5. `setup_file_logging` installs it before attaching the handler, so nothing
@@ -163,6 +165,46 @@ def check_an_unknown_logger_is_redacted() -> bool:
     return len(capture.lines) == 3
 
 
+def _fail_with_url() -> None:
+    """Raise the way aiohttp does: the request URL inside the exception text."""
+    message = "Cannot connect to host https://mainnet.example.com/?api-key=deadbeef0123"
+    raise ConnectionError(message)
+
+
+def check_traceback_is_redacted() -> bool:
+    """`logger.exception` prints the exception's text, which carries the URL.
+
+    aiohttp and httpx2 put the request URL in their error messages, and the
+    bot logs most RPC failures with `logger.exception`. Masking the message
+    alone leaves the traceback below it holding the key.
+    """
+    install_secret_redaction()
+    logger = logging.getLogger("some.library.raising")
+    logger.setLevel(logging.INFO)
+    lines: list[str] = []
+
+    class _Formatted(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            lines.append(logging.Formatter().format(record))
+
+    handler = _Formatted()
+    logger.addHandler(handler)
+    try:
+        try:
+            _fail_with_url()
+        except ConnectionError:
+            logger.exception("RPC call failed")
+    finally:
+        logger.removeHandler(handler)
+    if not lines or "Traceback" not in lines[0]:
+        print("     no traceback was formatted")
+        return False
+    if "deadbeef0123" in lines[0]:
+        print("     the traceback kept the key")
+        return False
+    return "mainnet.example.com" in lines[0]
+
+
 def check_importing_src_installs_redaction() -> bool:
     """A fresh interpreter that imports the RPC client is already protected.
 
@@ -248,6 +290,7 @@ def main() -> int:
             check_redact_masks_a_registered_value,
         ),
         ("an unlisted logger is redacted too", check_an_unknown_logger_is_redacted),
+        ("a logged traceback is redacted too", check_traceback_is_redacted),
         (
             "importing the RPC client installs the redaction",
             check_importing_src_installs_redaction,

@@ -173,7 +173,12 @@ in the verifier named in [docs/regression-tests.md](docs/regression-tests.md).
   `failure_reason` means "unknown", never "reverted".
 - `SUBMIT_FAILED` means "no transaction ever reached the chain" and nothing else
   — the one reason besides `REVERTED` that retries without asking the chain. A
-  post-submission throw reports `UNCONFIRMED` with its signature.
+  post-submission throw reports `UNCONFIRMED` with its signature, and so does a
+  send that timed out after the request went out (`build_and_send_transaction`
+  attaches it as `tx_signature` on the exception).
+- A buy is no different: an `UNCONFIRMED` buy is re-read (`getTransaction`, then
+  the wallet balance) before it is called failed, and a buy still unresolved is
+  never cleaned up as a failure — `on_fail` with force burn would burn it.
 - `confirm_transaction` and `verify_transaction_succeeded` deliberately stay
   bools. Returning the enum would be silent: every member is truthy, so every
   `if await client.confirm_transaction(sig):` would start passing unconditionally.

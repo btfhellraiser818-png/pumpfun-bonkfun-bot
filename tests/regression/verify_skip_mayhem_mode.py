@@ -14,6 +14,8 @@ Offline machine checks, no network and no funds moved:
   3. With the filter on, an ordinary coin is still bought.
   4. With the filter off (the default), a mayhem coin is still bought.
   5. bot_runner passes `filters.skip_mayhem_mode` through to the trader.
+  6. In single-token mode a filtered coin is passed over while waiting, so the
+     run buys the next coin instead of ending on the one it skipped.
 
 Usage:
     uv run tests/regression/verify_skip_mayhem_mode.py
@@ -108,6 +110,36 @@ def check_default_unchanged() -> bool:
     return _check("buys", passed=buys == 1, detail=f"{buys} (want 1)")
 
 
+def check_single_token_mode_passes_over() -> bool:
+    print("\n6. Single-token mode passes over a mayhem coin and takes the next")
+    mayhem, ordinary = _parse(MAYHEM_FIXTURE), _parse(ORDINARY_FIXTURE)
+
+    class _Listener:
+        async def listen_for_tokens(self, callback: object, *_a: object) -> None:
+            # Coins arrive in separate frames: the waiter runs between them.
+            await callback(mayhem)
+            await asyncio.sleep(0.2)
+            await callback(ordinary)
+            await asyncio.Event().wait()
+
+    trader = object.__new__(UniversalTrader)
+    trader.platform = Platform.PUMP_FUN
+    trader.allowed_quote_mints = None
+    trader.quote_amounts = {WSOL_MINT: 0.002}
+    trader.skip_mayhem_mode = True
+    trader.processed_tokens, trader.token_timestamps = set(), {}
+    trader.token_wait_timeout = 5
+    trader.match_string = trader.bro_address = None
+    trader.token_listener = _Listener()
+    found = asyncio.run(trader._wait_for_token())  # noqa: SLF001
+    return _check(
+        "coin handed to the buyer",
+        passed=found is not None and found.mint == ordinary.mint,
+        detail=f"{found and found.symbol!r} (want the ordinary coin, not the "
+        f"mayhem one; before the fix the run ended on the mayhem coin)",
+    )
+
+
 def check_runner_passes_setting() -> bool:
     print("\n5. bot_runner reads filters.skip_mayhem_mode")
     source = (PROJECT_ROOT / "src" / "bot_runner.py").read_text()
@@ -130,6 +162,7 @@ def main() -> None:
         check_mayhem_skipped,
         check_ordinary_still_bought,
         check_default_unchanged,
+        check_single_token_mode_passes_over,
         check_runner_passes_setting,
     ):
         try:

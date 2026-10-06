@@ -2,6 +2,7 @@
 installs before it logs anything — see `install_secret_redaction`.
 """
 
+import contextlib
 import logging
 import os
 import re
@@ -176,6 +177,17 @@ def _redact_record(record: logging.LogRecord) -> logging.LogRecord:
     if redacted != message:
         record.msg = redacted
         record.args = None
+    # A traceback renders the exception's own text (aiohttp and httpx2 put the
+    # request URL in it), and Formatter.format reuses a set exc_text rather
+    # than rendering again, so the masked copy is what every handler prints.
+    if record.exc_info and not record.exc_text:
+        with contextlib.suppress(Exception):
+            trace = logging.Formatter().formatException(record.exc_info)
+            masked = redact(trace)
+            if masked != trace:
+                record.exc_text = masked
+    if record.stack_info:
+        record.stack_info = redact(record.stack_info)
     return record
 
 

@@ -454,6 +454,11 @@ class UniversalTrader:
 
             # Only process if not already processed and fresh
             if token_key not in self.processed_tokens:
+                skip_reason = self._entry_skip_reason(token)
+                if skip_reason:
+                    self.processed_tokens.add(token_key)
+                    logger.info(f"Passing over {token.symbol} - {skip_reason}")
+                    return
                 # Record when the token was discovered
                 self.token_timestamps[token_key] = monotonic()
                 found_token = token
@@ -632,29 +637,11 @@ class UniversalTrader:
                 )
                 return
 
-            # Cheaper to drop an unconfigured quote asset here than on-chain.
+            skip_reason = self._entry_skip_reason(token_info)
+            if skip_reason:
+                logger.info(f"Skipping {token_info.symbol} - {skip_reason}")
+                return
             token_quote_mint = normalize_quote_mint(token_info.quote_mint)
-            if (
-                self.allowed_quote_mints is not None
-                and token_quote_mint not in self.allowed_quote_mints
-            ):
-                logger.info(
-                    f"Skipping {token_info.symbol} - quote mint {token_quote_mint} "
-                    f"not in allowed_quote_mints"
-                )
-                return
-            if token_quote_mint not in self.quote_amounts:
-                logger.info(
-                    f"Skipping {token_info.symbol} - no buy amount configured for "
-                    f"quote mint {token_quote_mint}"
-                )
-                return
-            # A mayhem-mode curve's virtual reserves can price a position above
-            # the real SOL it holds, and pump.fun then reverts every sell of it
-            # with Overflow (6024) whatever the slippage, stranding the tokens.
-            if self.skip_mayhem_mode and token_info.is_mayhem_mode:
-                logger.info(f"Skipping {token_info.symbol} - mayhem mode coin")
-                return
 
             # Wait for pool/curve to stabilize (unless in extreme fast mode)
             if not self.extreme_fast_mode:
@@ -686,6 +673,28 @@ class UniversalTrader:
 
         except Exception:
             logger.exception(f"Error handling token {token_info.symbol}")
+
+    def _entry_skip_reason(self, token_info: TokenInfo) -> str | None:
+        """Why a coin must not be bought, or None if it passes the entry filters.
+
+        Checked while waiting in single-token mode too, so a rejected coin is
+        passed over instead of ending the run.
+        """
+        # Cheaper to drop an unconfigured quote asset here than on-chain.
+        quote_mint = normalize_quote_mint(token_info.quote_mint)
+        if (
+            self.allowed_quote_mints is not None
+            and quote_mint not in self.allowed_quote_mints
+        ):
+            return f"quote mint {quote_mint} not in allowed_quote_mints"
+        if quote_mint not in self.quote_amounts:
+            return f"no buy amount configured for quote mint {quote_mint}"
+        # A mayhem-mode curve's virtual reserves can price a position above the
+        # real SOL it holds, and pump.fun then reverts every sell of it with
+        # Overflow (6024) whatever the slippage, stranding the tokens.
+        if self.skip_mayhem_mode and token_info.is_mayhem_mode:
+            return "mayhem mode coin"
+        return None
 
     async def _handle_successful_buy(
         self, token_info: TokenInfo, buy_result: TradeResult
@@ -723,6 +732,19 @@ class UniversalTrader:
     ) -> None:
         """Handle failed token purchase."""
         logger.error(f"Failed to buy {token_info.symbol}: {buy_result.error_message}")
+        if buy_result.failure_reason is TradeFailureReason.UNCONFIRMED:
+            # The buy may have landed: never burn it as a failure. Track the mint
+            # so session cleanup reaches its account, and say where to look.
+            logger.error(
+                f"Buy of {token_info.symbol} ({token_info.mint}) is unresolved; "
+                f"check {buy_result.tx_signature} and sell manually if it landed"
+            )
+            self.traded_mints.add(token_info.mint)
+            if token_info.token_program_id:
+                self.traded_token_programs[str(token_info.mint)] = (
+                    token_info.token_program_id
+                )
+            return
         # Close ATA if enabled
         await handle_cleanup_after_failure(
             self.solana_client,

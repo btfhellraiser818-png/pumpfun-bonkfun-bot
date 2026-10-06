@@ -120,6 +120,27 @@ def _refresh_quote_mint(token_info: TokenInfo, pool_state: dict) -> Pubkey:
     return quote_mint
 
 
+def _apply_curve_creator(
+    token_info: TokenInfo, pool_state: dict, address_provider: AddressProvider
+) -> None:
+    """Take creator and creator_vault from freshly-read curve state.
+
+    The buy derives creator_vault from BondingCurve.creator, which a coin can
+    hand to a fee-sharing config after the create; a vault derived from the
+    listener's creator then reverts with ConstraintSeeds (2006).
+    """
+    fresh_creator = pool_state.get("creator")
+    if not fresh_creator or not hasattr(address_provider, "derive_creator_vault"):
+        return
+    creator = (
+        Pubkey.from_string(fresh_creator)
+        if isinstance(fresh_creator, str)
+        else fresh_creator
+    )
+    token_info.creator = creator
+    token_info.creator_vault = address_provider.derive_creator_vault(creator)
+
+
 def _price_from_reserves(token_info: TokenInfo, quote_unit: int) -> float | None:
     """Price per whole token, in whole quote units, from token_info's reserves.
 
@@ -272,6 +293,9 @@ class PlatformAwareBuyer(Trader):
                     "is_cashback_coin", token_info.is_cashback_coin
                 )
                 quote_mint = _refresh_quote_mint(token_info, pool_state)
+                # The creator can have moved to a fee-sharing config since the
+                # create; a vault derived from the listener's creator reverts.
+                _apply_curve_creator(token_info, pool_state, address_provider)
 
             # A quote asset with no configured amount cannot be traded: spending
             # `amount` of it would be a different order of magnitude.
@@ -375,6 +399,8 @@ class PlatformAwareBuyer(Trader):
                 )
                 tx_signature = await submit_buy()
                 status = await self.client.confirm_transaction_detailed(tx_signature)
+            if status is ConfirmationStatus.UNCONFIRMED:
+                status = await self._resolve_unconfirmed_buy(token_info, tx_signature)
             success = status is ConfirmationStatus.SUCCESS
 
             if success:
@@ -447,14 +473,61 @@ class PlatformAwareBuyer(Trader):
                 return TradeResult(
                     success=False,
                     platform=token_info.platform,
-                    error_message=f"Transaction failed to confirm: {tx_signature}",
+                    tx_signature=str(tx_signature),
+                    error_message=(
+                        f"Buy reverted on chain: {tx_signature}"
+                        if status is ConfirmationStatus.REVERTED
+                        else f"Buy outcome unknown: {tx_signature}"
+                    ),
+                    failure_reason=_FAILURE_REASON_FOR[status],
                 )
 
         except Exception as e:
             logger.exception("Buy operation failed")
+            # A send that timed out after the request went out may still land;
+            # build_and_send_transaction attaches the signature in that case.
+            sent = getattr(e, "tx_signature", None)
             return TradeResult(
-                success=False, platform=token_info.platform, error_message=str(e)
+                success=False,
+                platform=token_info.platform,
+                tx_signature=None if sent is None else str(sent),
+                error_message=str(e),
+                failure_reason=None if sent is None else TradeFailureReason.UNCONFIRMED,
             )
+
+    async def _resolve_unconfirmed_buy(
+        self, token_info: TokenInfo, tx_signature: object
+    ) -> ConfirmationStatus:
+        """Settle a buy whose confirmation never answered, before calling it failed.
+
+        A buy reported failed is never sold and, under cleanup.mode "on_fail"
+        with force burn, is burned. So an unknown outcome is read back from the
+        chain first, then from the wallet: tokens in the ATA mean the buy landed
+        even if its transaction is not visible yet.
+
+        Returns:
+            SUCCESS if the buy landed, REVERTED if it reverted, UNCONFIRMED if
+            neither the chain nor the wallet can say.
+        """
+        logger.warning(
+            f"Buy of {token_info.symbol} was not confirmed; re-checking "
+            f"{str(tx_signature)[:16]}... before calling it failed"
+        )
+        try:
+            status = await self.client.verify_transaction_status(tx_signature)
+        except Exception:
+            logger.exception("Re-checking the unconfirmed buy failed")
+            status = ConfirmationStatus.UNCONFIRMED
+        if status is not ConfirmationStatus.UNCONFIRMED:
+            return status
+        balance = await self._read_token_balance(token_info)
+        if balance is not None and balance > 0:
+            logger.warning(
+                f"Wallet holds {balance:.6f} {token_info.symbol}; treating the "
+                f"unconfirmed buy as landed"
+            )
+            return ConfirmationStatus.SUCCESS
+        return ConfirmationStatus.UNCONFIRMED
 
     async def _creator_moved(
         self,
@@ -500,9 +573,9 @@ class PlatformAwareBuyer(Trader):
     async def _read_token_balance(self, token_info: TokenInfo) -> float | None:
         """Read how many of a coin the wallet actually holds.
 
-        Used only when a landed buy's amounts could not be parsed back out of the
-        transaction. Selling more than is held reverts, so the balance beats the
-        expected amount.
+        Used when a landed buy's amounts could not be parsed back out of the
+        transaction, and to tell whether an unconfirmed buy landed. Selling more
+        than is held reverts, so the balance beats the expected amount.
 
         Args:
             token_info: Token information carrying the mint and token program
@@ -597,17 +670,7 @@ class PlatformAwareBuyer(Trader):
         token_info.virtual_quote_reserves = pool_state.get(
             "virtual_quote_reserves", token_info.virtual_quote_reserves
         )
-        fresh_creator = pool_state.get("creator")
-        if fresh_creator and hasattr(address_provider, "derive_creator_vault"):
-            new_creator = (
-                Pubkey.from_string(fresh_creator)
-                if isinstance(fresh_creator, str)
-                else fresh_creator
-            )
-            token_info.creator = new_creator
-            token_info.creator_vault = address_provider.derive_creator_vault(
-                new_creator
-            )
+        _apply_curve_creator(token_info, pool_state, address_provider)
         self._apply_token_program(token_info, fresh_token_program, address_provider)
         return None
 
@@ -619,9 +682,9 @@ class PlatformAwareBuyer(Trader):
     ) -> None:
         """Correct a listener-guessed token program from the mint's real owner.
 
-        A CreateEvent does not say which create variant ran, so the logs path
-        defaults to Token-2022; a legacy-`create` coin is SPL Token and the
-        ATA-create instruction then fails with IncorrectProgramId. The associated bonding
+        Instruction-parsed TokenInfo and old-format CreateEvents default to
+        Token-2022; a legacy-`create` coin is SPL Token and the ATA-create
+        instruction then fails with IncorrectProgramId. The associated bonding
         curve is an ordinary ATA, so it is re-derived under the corrected program.
 
         Args:
@@ -797,19 +860,7 @@ class PlatformAwareSeller(Trader):
                 # the initial creator buy, so the create-time vault on
                 # token_info goes stale before the sell lands and the sell
                 # reverts with ConstraintSeeds (0x7d6).
-                fresh_creator = pool_state.get("creator")
-                if fresh_creator:
-                    from solders.pubkey import Pubkey as _Pubkey
-
-                    new_creator = (
-                        _Pubkey.from_string(fresh_creator)
-                        if isinstance(fresh_creator, str)
-                        else fresh_creator
-                    )
-                    token_info.creator = new_creator
-                    token_info.creator_vault = address_provider.derive_creator_vault(
-                        new_creator
-                    )
+                _apply_curve_creator(token_info, pool_state, address_provider)
             except Exception as e:  # noqa: BLE001
                 logger.warning(
                     f"Could not refresh curve flags before sell ({e}); "
@@ -917,6 +968,10 @@ class PlatformAwareSeller(Trader):
 
         except Exception as e:
             logger.exception("Sell operation failed")
+            # A send that timed out after the request went out may still land.
+            # `is None`, not `or`: a Signature can be falsy.
+            if tx_signature is None:
+                tx_signature = getattr(e, "tx_signature", None)
             if tx_signature is None:
                 # Nothing reached the chain, so there is nothing to resolve and
                 # resending is safe.
